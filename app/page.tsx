@@ -48,7 +48,7 @@ export default function LandingPage() {
               <ArrowRight className="h-4 w-4" />
             </Link>
             <p className="text-xs leading-5 text-mist">
-              Use email sign-in for local development. GitHub OAuth activates automatically when env vars are set.
+              Use email-and-password sign-in by default. GitHub OAuth activates automatically when env vars are set.
             </p>
           </div>
         </aside>

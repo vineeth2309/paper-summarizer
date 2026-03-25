@@ -13,7 +13,7 @@ Dark, full-stack `Next.js` app for importing research papers, reading the raw do
 ## Features
 
 - Landing page and dark dashboard shell inspired by the reference design
-- Email-based local sign-in with optional GitHub OAuth
+- Email-and-password auth with password reset plus optional Google/GitHub OAuth
 - Paper import from `arXiv` links or direct `PDF` URLs
 - Raw paper view with embedded PDF and extracted text sections
 - Prompt-driven `Summarize` flow using `prompts/paper-agent.md`
@@ -43,6 +43,13 @@ NEXTAUTH_URL="http://localhost:3000"
 OPENAI_API_KEY=""
 GITHUB_ID=""
 GITHUB_SECRET=""
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+SMTP_HOST=""
+SMTP_PORT="587"
+SMTP_USER=""
+SMTP_PASS=""
+EMAIL_FROM="paper-summarizer@local.dev"
 ```
 
 3. Generate the Prisma client:
@@ -66,6 +73,8 @@ npm run dev
 ## Notes
 
 - Without `OPENAI_API_KEY`, the app still works with a local fallback summarizer and chat response mode so the UI can be exercised end-to-end.
+- Without SMTP configured, forgot-password still works in local development by returning a reset link directly instead of sending email.
+- Google sign-in works once `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured in your env and the OAuth callback URL points to `/api/auth/callback/google`.
 - The editable summarization instructions live in [prompts/paper-agent.md](/C:/Users/HP/Desktop/projects/paper-summarizer/prompts/paper-agent.md).
 - User data is modeled with shared tables scoped by `userId`, which is the correct multitenant design for this product.
 

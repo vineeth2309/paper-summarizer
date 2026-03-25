@@ -37,11 +37,13 @@ model User {
   email         String?         @unique
   emailVerified DateTime?
   image         String?
+  passwordHash  String?
   accounts      Account[]
   sessions      Session[]
   papers        Paper[]
   chatThreads   ChatThread[]
   embeddings    Embedding[]
+  passwordResetTokens PasswordResetToken[]
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 }
@@ -78,6 +80,17 @@ model VerificationToken {
   expires    DateTime
 
   @@id([identifier, token])
+}
+
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
 }
 
 model Paper {

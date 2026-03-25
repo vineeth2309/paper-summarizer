@@ -1,13 +1,15 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import GitHub from "next-auth/providers/github";
+import Google from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { verifyPassword } from "@/lib/password";
 
 const credentialsSchema = z.object({
-  name: z.string().min(1).max(80).optional(),
-  email: z.string().email()
+  email: z.string().email(),
+  password: z.string().min(8).max(128)
 });
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -37,10 +39,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   },
   providers: [
     Credentials({
-      name: "Email",
+      name: "Email and password",
       credentials: {
-        name: { label: "Name", type: "text" },
-        email: { label: "Email", type: "email" }
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" }
       },
       async authorize(rawCredentials) {
         const parsed = credentialsSchema.safeParse(rawCredentials);
@@ -49,21 +51,17 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           return null;
         }
 
-        const { email, name } = parsed.data;
+        const { email, password } = parsed.data;
         const existing = await prisma.user.findUnique({
           where: { email }
         });
 
-        if (existing) {
-          return existing;
+        if (!existing?.passwordHash) {
+          return null;
         }
 
-        return prisma.user.create({
-          data: {
-            email,
-            name: name ?? email.split("@")[0]
-          }
-        });
+        const valid = await verifyPassword(password, existing.passwordHash);
+        return valid ? existing : null;
       }
     }),
     ...(process.env.GITHUB_ID && process.env.GITHUB_SECRET
@@ -71,6 +69,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           GitHub({
             clientId: process.env.GITHUB_ID,
             clientSecret: process.env.GITHUB_SECRET
+          })
+        ]
+      : []),
+    ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+      ? [
+          Google({
+            clientId: process.env.GOOGLE_CLIENT_ID,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET
           })
         ]
       : [])

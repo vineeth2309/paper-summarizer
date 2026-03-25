@@ -43,9 +43,7 @@ export function PaperWorkspace({
       <div className="min-w-0 flex-1 rounded-[24px] border border-white/8 bg-[#171717]">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/8 px-5 py-4">
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.18em] text-mist">
-              {paper.sourceType === "ARXIV" ? "arXiv import" : "Direct PDF"} · {paper.status} · {paper.summaryStatus}
-            </p>
+            <p className="text-xs uppercase tracking-[0.18em] text-mist">{paper.sourceType === "ARXIV" ? "arXiv import" : "Direct PDF"}</p>
             <h1 className="truncate text-2xl font-semibold text-white">{paper.title}</h1>
           </div>
           <div className="flex items-center gap-3">
