@@ -116,6 +116,7 @@ export function SummaryView({ summary, summaryStatus, figures, references }: Pro
   const data = parsed.data;
   const heroFigure = figures.find((figure) => figure.label === data.figureStory.label);
   const nonHeroFigures = data.importantFigures.filter((figure) => figure.label !== data.figureStory.label);
+  const paperTypeLabel = data.paperType.replace(/_/g, " ");
   const architectureFigure =
     figures.find((figure) => figure.label === pickArchitectureFigure(figures)?.label) ??
     figures.find((figure) => figure.imageUrl && /architecture|overview|pipeline|framework|method|system|workflow|diagram|model/i.test(figure.caption ?? "")) ??
@@ -125,6 +126,9 @@ export function SummaryView({ summary, summaryStatus, figures, references }: Pro
     <div className="space-y-5">
       <div className="rounded-[26px] border border-white/8 bg-[#111111] p-6">
         <p className="text-sm uppercase tracking-[0.22em] text-mist">Interactive summary</p>
+        <div className="mt-4 inline-flex rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs uppercase tracking-[0.18em] text-[#e6ddd1]">
+          {paperTypeLabel}
+        </div>
         <h2 className="mt-3 text-4xl font-semibold leading-tight text-white">{data.title}</h2>
         <p className="mt-4 max-w-4xl text-xl leading-9 text-[#f0e6d8]">{data.oneLiner}</p>
         <div className="mt-6 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
@@ -239,7 +243,9 @@ export function SummaryView({ summary, summaryStatus, figures, references }: Pro
         </div>
 
         <div className="rounded-[26px] border border-white/8 bg-[#111111] p-6">
-          <p className="text-sm uppercase tracking-[0.22em] text-mist">Important figures</p>
+          <p className="text-sm uppercase tracking-[0.22em] text-mist">
+            {data.paperType === "benchmark_dataset" || data.paperType === "survey_review" ? "Important figures and artifacts" : "Important figures"}
+          </p>
           <div className="mt-5 space-y-4">
             {nonHeroFigures.length ? (
               nonHeroFigures.map((figure) => (

@@ -62,6 +62,82 @@ function guessShape(label: string, description: string, index: number) {
   };
 }
 
+function collectPaperText(input: {
+  title: string;
+  abstract: string | null;
+  sections: { heading: string | null; content: string }[];
+  references?: { title: string | null; rawText: string }[];
+}) {
+  return [
+    input.title,
+    input.abstract ?? "",
+    ...input.sections.map((section) => `${section.heading ?? ""} ${section.content}`),
+    ...(input.references?.map((reference) => `${reference.title ?? ""} ${reference.rawText}`) ?? [])
+  ]
+    .join("\n")
+    .toLowerCase();
+}
+
+function classifyPaperType(input: {
+  title: string;
+  abstract: string | null;
+  sections: { heading: string | null; content: string }[];
+  references: { title: string | null; rawText: string }[];
+}): PaperSummaryPayload["paperType"] {
+  const text = collectPaperText(input);
+
+  if (/(survey|review|taxonomy|meta-analysis|systematic review|scoping review|literature review|overview of)/i.test(text)) {
+    return "survey_review";
+  }
+
+  if (/(theorem|lemma|proof|proposition|corollary|we prove|assume that|convergence|bound)/i.test(text)) {
+    return "theory";
+  }
+
+  if (/(benchmark|dataset|task suite|leaderboard|evaluation protocol|baseline|metrics|corpus)/i.test(text)) {
+    return "benchmark_dataset";
+  }
+
+  if (/(participants|subjects|cohort|questionnaire|interview|observational study|clinical|trial|randomized)/i.test(text)) {
+    return "empirical_study";
+  }
+
+  if (/(position paper|perspective|commentary|opinion|we argue|policy implications|ethical implications)/i.test(text)) {
+    return "position_argument";
+  }
+
+  if (/(case study|case report|field deployment|real-world deployment)/i.test(text)) {
+    return "case_study";
+  }
+
+  if (/(historical|chronology|timeline|retrospective|history of|archival)/i.test(text)) {
+    return "historical_descriptive";
+  }
+
+  if (/(architecture|model|network|framework|pipeline|encoder|decoder|algorithm|training|inference|system)/i.test(text)) {
+    return "method_system";
+  }
+
+  return "other";
+}
+
+function visualizationTypeForPaperType(paperType: PaperSummaryPayload["paperType"]): PaperSummaryPayload["visualization"]["type"] {
+  switch (paperType) {
+    case "method_system":
+      return "architecture";
+    case "survey_review":
+      return "taxonomy";
+    case "benchmark_dataset":
+      return "benchmark_flow";
+    case "theory":
+    case "position_argument":
+    case "empirical_study":
+      return "argument_flow";
+    default:
+      return "concept_map";
+  }
+}
+
 function buildFallbackGraph(input: {
   sections: { heading: string | null; content: string }[];
   abstract: string | null;
@@ -230,6 +306,118 @@ function buildFallbackGraph(input: {
   };
 }
 
+function buildConceptualFallbackGraph(input: {
+  paperType: Exclude<PaperSummaryPayload["paperType"], "method_system">;
+  sections: { heading: string | null; content: string }[];
+}) {
+  const sections = input.sections.slice(0, 6);
+  const nodes: PaperSummaryPayload["visualization"]["graph"]["nodes"] = [];
+  const edges: PaperSummaryPayload["visualization"]["graph"]["edges"] = [];
+
+  const labelsByType = {
+    survey_review: ["Scope", "Taxonomy", "Comparisons", "Open problems"],
+    benchmark_dataset: ["Setup", "Evaluation", "Results", "Takeaways"],
+    theory: ["Assumptions", "Argument", "Claims", "Implications"],
+    empirical_study: ["Question", "Method", "Findings", "Interpretation"],
+    position_argument: ["Premise", "Argument", "Claims", "Implications"],
+    case_study: ["Context", "Case", "Analysis", "Implications"],
+    historical_descriptive: ["Context", "Events", "Analysis", "Implications"],
+    other: ["Context", "Core ideas", "Evidence", "Implications"]
+  } as const;
+
+  const layerLabels = labelsByType[input.paperType];
+
+  sections.forEach((section, index) => {
+    const layer = Math.min(index, layerLabels.length - 1);
+    const nodeId = `section-${index + 1}`;
+    nodes.push({
+      id: nodeId,
+      label: section.heading ?? layerLabels[layer],
+      type: "concept",
+      description: truncate(section.content, 180),
+      shape:
+        input.paperType === "benchmark_dataset"
+          ? "artifact -> metric -> result"
+          : input.paperType === "theory"
+            ? "assumption -> claim"
+            : "conceptual unit",
+      shapeConfidence: "inferred",
+      groupId: `group-${layer + 1}`,
+      layer,
+      inputPorts: [{ id: `${nodeId}-in`, label: "incoming", side: "left" }],
+      outputPorts: [{ id: `${nodeId}-out`, label: "outgoing", side: "right" }]
+    });
+
+    if (index > 0) {
+      const previous = `section-${index}`;
+      edges.push({
+        fromNodeId: previous,
+        fromPort: `${previous}-out`,
+        toNodeId: nodeId,
+        toPort: `${nodeId}-in`,
+        tensorLabel:
+          input.paperType === "survey_review"
+            ? "theme transition"
+            : input.paperType === "benchmark_dataset"
+              ? "evaluation flow"
+              : input.paperType === "theory"
+                ? "logical dependency"
+                : "idea flow",
+        shape:
+          input.paperType === "benchmark_dataset"
+            ? "setup -> metric -> result"
+            : input.paperType === "theory"
+              ? "premise -> claim"
+              : "concept -> concept",
+        shapeConfidence: "inferred",
+        semanticRole: "narrative progression"
+      });
+    }
+  });
+
+  return {
+    story:
+      input.paperType === "survey_review"
+        ? "This paper is best read as a map of categories, comparisons, and gaps rather than a model architecture."
+        : input.paperType === "benchmark_dataset"
+          ? "This paper is best understood as an evaluation flow showing what is tested, how it is measured, and what the results imply."
+          : input.paperType === "theory"
+            ? "This paper is structured around assumptions, supporting arguments, and claims rather than a system pipeline."
+            : "This paper is better read as connected concepts and arguments than as a computational architecture.",
+    nodes,
+    edges,
+    groups: layerLabels.map((label, index) => ({
+      id: `group-${index + 1}`,
+      label,
+      description: `${label} stage in the paper's structure.`,
+      layerStart: index,
+      layerEnd: index
+    })),
+    paths: [
+      {
+        id: "main-path",
+        label:
+          input.paperType === "survey_review"
+            ? "Taxonomy route"
+            : input.paperType === "benchmark_dataset"
+              ? "Evaluation route"
+              : input.paperType === "theory"
+                ? "Claim route"
+                : "Main path",
+        description: "Follows the paper's main intellectual progression from setup or premise to conclusion.",
+        edgeSequence: edges.map((_, index) => index),
+        nodeSequence: nodes.map((node) => node.id)
+      }
+    ],
+    shapeNotes: [
+      {
+        target: "graph",
+        note: "This visualization is conceptual rather than tensor-based because this paper type is not primarily a model architecture paper."
+      }
+    ]
+  };
+}
+
 function buildFallbackSummary(input: {
   title: string;
   abstract: string | null;
@@ -239,16 +427,33 @@ function buildFallbackSummary(input: {
 }): PaperSummaryPayload {
   const prioritizedFigures = prioritizeFigures(input.figures);
   const primaryFigure = prioritizedFigures[0] ?? input.figures[0];
-  const fallbackGraph = buildFallbackGraph(input);
+  const paperType = classifyPaperType(input);
+  const visualizationType = visualizationTypeForPaperType(paperType);
+  const fallbackGraph =
+    paperType === "method_system"
+      ? buildFallbackGraph(input)
+      : buildConceptualFallbackGraph({
+          paperType,
+          sections: input.sections
+        });
 
   return {
     title: input.title,
+    paperType,
     oneLiner: truncate(input.abstract ?? "Interactive summary generated from the paper contents.", 160),
     narrativeSummary:
       input.abstract ??
       "This paper was parsed successfully, but no OpenAI key is configured so the app is using a local narrative fallback summary.",
     whyItMatters:
-      "This fallback summary highlights the paper's likely pipeline and context so the UI remains usable even without a model response.",
+      paperType === "method_system"
+        ? "This fallback summary highlights the paper's likely pipeline and context so the UI remains usable even without a model response."
+        : paperType === "survey_review"
+          ? "This fallback summary treats the paper as a structured map of themes, comparisons, and open questions instead of forcing a systems pipeline."
+          : paperType === "benchmark_dataset"
+            ? "This fallback summary emphasizes the benchmark setup, metrics, results, and practical takeaways rather than pretending the paper is a model architecture."
+            : paperType === "theory"
+              ? "This fallback summary focuses on assumptions, claims, and implications rather than inventing architecture that the paper does not contain."
+              : "This fallback summary keeps the paper readable by using a concept-first structure instead of an ML-specific architecture view.",
     keyTakeaways: input.sections.slice(0, 4).map((section) => truncate(section.content, 120)),
     figureStory: {
       label: primaryFigure?.label ?? "Figure 1",
@@ -259,21 +464,47 @@ function buildFallbackSummary(input: {
       whyThisFigure: "This is the first figure mention extracted from the paper and is likely part of the core explanation."
     },
     visualization: {
-      type: "architecture",
-      title: "System graph",
-      purpose: "Shows how the paper's inputs, core model, and outputs connect in one place with symbolic shapes on each edge.",
+      type: visualizationType,
+      title:
+        visualizationType === "architecture"
+          ? "System graph"
+          : visualizationType === "taxonomy"
+            ? "Theme map"
+            : visualizationType === "benchmark_flow"
+              ? "Benchmark flow"
+              : visualizationType === "argument_flow"
+                ? "Argument map"
+                : "Concept map",
+      purpose:
+        visualizationType === "architecture"
+          ? "Shows how the paper's inputs, core model, and outputs connect in one place with symbolic shapes on each edge."
+          : visualizationType === "taxonomy"
+            ? "Organizes the paper as themes, comparisons, and gaps rather than a system pipeline."
+            : visualizationType === "benchmark_flow"
+              ? "Shows the setup, evaluation protocol, results, and takeaways in one connected view."
+              : visualizationType === "argument_flow"
+                ? "Shows how premises, evidence, and claims connect across the paper."
+                : "Shows the main concepts and how they relate across the paper.",
       viewMode: "full",
       graph: fallbackGraph
     },
     intuition: [
       {
         title: "What to keep in mind",
-        body: "Read the method as a sequence of representations rather than isolated sections.",
-        bullets: [
-          "What enters the model?",
-          "What latent state does it build?",
-          "What prediction or control heads read that latent?"
-        ]
+        body:
+          paperType === "method_system"
+            ? "Read the method as a sequence of representations rather than isolated sections."
+            : "Read this paper according to its actual argument or evidence structure rather than forcing a model-architecture lens onto it.",
+        bullets:
+          paperType === "method_system"
+            ? ["What enters the model?", "What latent state does it build?", "What prediction or control heads read that latent?"]
+            : paperType === "survey_review"
+              ? ["What categories organize the literature?", "What trade-offs separate those categories?", "What gaps or open problems remain?"]
+              : paperType === "benchmark_dataset"
+                ? ["What is being benchmarked?", "How is performance measured?", "Which results matter for practice?"]
+                : paperType === "theory"
+                  ? ["What assumptions does the paper start from?", "What claim is actually proven?", "Where is the result likely to be narrow or fragile?"]
+                  : ["What question is the paper asking?", "What evidence supports the claims?", "What practical implication should the reader take away?"]
       }
     ],
     relatedConcepts: input.references.slice(0, 3).map((reference) => ({
@@ -289,8 +520,20 @@ function buildFallbackSummary(input: {
     })),
     detailSections: [
       {
-        title: "Core method",
-        body: "This fallback mode reconstructs a plausible end-to-end story from the extracted sections.",
+        title:
+          paperType === "method_system"
+            ? "Core method"
+            : paperType === "survey_review"
+              ? "Theme map"
+              : paperType === "benchmark_dataset"
+                ? "Benchmark structure"
+                : paperType === "theory"
+                  ? "Claim structure"
+                  : "Core structure",
+        body:
+          paperType === "method_system"
+            ? "This fallback mode reconstructs a plausible end-to-end story from the extracted sections."
+            : "This fallback mode reconstructs the paper's main structure from extracted sections without forcing an ML architecture summary.",
         bullets: fallbackGraph.nodes.map((node) => `${node.label}: ${node.description}`)
       },
       {
@@ -301,7 +544,9 @@ function buildFallbackSummary(input: {
     ],
     limitations: [
       "This summary is using local heuristics rather than the OpenAI summarization prompt.",
-      "The architecture and shape walkthrough are heuristic in fallback mode."
+      visualizationType === "architecture"
+        ? "The architecture and shape walkthrough are heuristic in fallback mode."
+        : "The conceptual visualization is heuristic in fallback mode and may simplify the paper's true structure."
     ]
   };
 }

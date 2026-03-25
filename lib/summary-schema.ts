@@ -1,6 +1,17 @@
 import { z } from "zod";
 
 const shapeConfidenceSchema = z.enum(["stated", "inferred"]);
+const paperTypeValues = [
+  "method_system",
+  "theory",
+  "survey_review",
+  "benchmark_dataset",
+  "empirical_study",
+  "position_argument",
+  "case_study",
+  "historical_descriptive",
+  "other"
+] as const;
 const visualizationTypeValues = ["architecture", "concept_map", "benchmark_flow", "taxonomy", "argument_flow"] as const;
 const viewModeValues = ["inference", "training", "full"] as const;
 const graphNodeTypeValues = [
@@ -87,6 +98,7 @@ const graphShapeNoteSchema = z.object({
 
 const baseSummarySchema = z.object({
   title: z.string(),
+  paperType: z.enum(paperTypeValues).default("method_system"),
   oneLiner: z.string(),
   narrativeSummary: z.string(),
   whyItMatters: z.string(),
@@ -290,6 +302,7 @@ export const paperSummarySchema = z.union([baseSummarySchema, legacySummarySchem
 
   return {
     title: payload.title,
+    paperType: "method_system" as const,
     oneLiner: payload.oneLiner,
     narrativeSummary: payload.narrativeSummary,
     whyItMatters: payload.whyItMatters,
