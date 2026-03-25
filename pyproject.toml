@@ -1,0 +1,9 @@
+[project]
+name = "paper-summarizer-local"
+version = "0.1.0"
+description = "Local Python helpers for the paper summarizer app."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pymupdf>=1.26.0",
+]
