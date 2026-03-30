@@ -41,6 +41,11 @@ DATABASE_URL="postgresql://postgres:postgres@localhost:5432/paper_summarizer?sch
 AUTH_SECRET="replace-with-a-long-random-string"
 NEXTAUTH_URL="http://localhost:3000"
 OPENAI_API_KEY=""
+OPENAI_TEXT_MODEL=""
+OPENAI_SUMMARY_MODEL=""
+OPENAI_PLANNER_MODEL=""
+OPENAI_CHAT_MODEL=""
+OPENAI_EMBEDDING_MODEL=""
 GITHUB_ID=""
 GITHUB_SECRET=""
 GOOGLE_CLIENT_ID=""
@@ -73,6 +78,8 @@ npm run dev
 ## Notes
 
 - Without `OPENAI_API_KEY`, the app still works with a local fallback summarizer and chat response mode so the UI can be exercised end-to-end.
+- Text-generation and embedding calls use different model families. `OPENAI_TEXT_MODEL` sets the shared default text model, while `OPENAI_SUMMARY_MODEL`, `OPENAI_PLANNER_MODEL`, and `OPENAI_CHAT_MODEL` can override it per feature. `OPENAI_EMBEDDING_MODEL` is separate.
+- If you leave the model env vars blank, the app defaults to `gpt-4.1` for summaries, `gpt-4.1-mini` for planner/chat, and `text-embedding-3-small` for embeddings.
 - Without SMTP configured, forgot-password still works in local development by returning a reset link directly instead of sending email.
 - Google sign-in works once `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are configured in your env and the OAuth callback URL points to `/api/auth/callback/google`.
 - The editable summarization instructions live in [prompts/paper-agent.md](/C:/Users/HP/Desktop/projects/paper-summarizer/prompts/paper-agent.md).

@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { getOpenAIModel } from "@/lib/openai-config";
 import { average } from "@/lib/utils";
 
 const openai = process.env.OPENAI_API_KEY
@@ -21,7 +22,7 @@ export async function embedText(text: string) {
   }
 
   const response = await openai.embeddings.create({
-    model: "text-embedding-3-small",
+    model: getOpenAIModel("embedding"),
     input: text.slice(0, 8000)
   });
 

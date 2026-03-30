@@ -35,7 +35,7 @@ const figureFocusSchema = z.object({
   title: z.string(),
   takeaway: z.string(),
   caption: z.string().default(""),
-  imageUrl: z.string().optional(),
+  imageUrl: z.string().nullable().optional(),
   whyThisFigure: z.string()
 });
 
@@ -43,6 +43,15 @@ const detailSectionSchema = z.object({
   title: z.string(),
   body: z.string(),
   bullets: z.array(z.string()).default([])
+});
+
+const explainerSchema = z.object({
+  title: z.string(),
+  summary: z.string(),
+  steps: z.array(z.string()).default([]),
+  shapeWalkthrough: z.array(z.string()).default([]),
+  lossAndOptimization: z.array(z.string()).default([]),
+  workedExample: z.array(z.string()).default([])
 });
 
 const graphPortSchema = z.object({
@@ -118,6 +127,24 @@ const baseSummarySchema = z.object({
       shapeNotes: z.array(graphShapeNoteSchema).default([])
     })
   }),
+  trainingExplainer: explainerSchema.optional(),
+  inferenceExplainer: explainerSchema.optional(),
+  inferenceVisualization: z
+    .object({
+      type: z.enum(visualizationTypeValues).default("architecture"),
+      title: z.string(),
+      purpose: z.string(),
+      viewMode: z.enum(viewModeValues).default("inference"),
+      graph: z.object({
+        story: z.string(),
+        nodes: z.array(graphNodeSchema),
+        edges: z.array(graphEdgeSchema),
+        groups: z.array(graphGroupSchema).default([]),
+        paths: z.array(graphPathSchema).default([]),
+        shapeNotes: z.array(graphShapeNoteSchema).default([])
+      })
+    })
+    .optional(),
   intuition: z.array(detailSectionSchema),
   relatedConcepts: z.array(
     z.object({
@@ -132,7 +159,7 @@ const baseSummarySchema = z.object({
       title: z.string(),
       reason: z.string(),
       caption: z.string().default(""),
-      imageUrl: z.string().optional()
+      imageUrl: z.string().nullable().optional()
     })
   ),
   detailSections: z.array(detailSectionSchema),
@@ -191,7 +218,7 @@ const legacySummarySchema = z.object({
       title: z.string(),
       reason: z.string(),
       caption: z.string().default(""),
-      imageUrl: z.string().optional()
+      imageUrl: z.string().nullable().optional()
     })
   ),
   detailSections: z.array(detailSectionSchema),
@@ -260,6 +287,187 @@ function normalizeVisualizationGraph(visualization: z.infer<typeof baseSummarySc
   };
 }
 
+function deriveFocusedVisualization(
+  visualization: z.infer<typeof baseSummarySchema>["visualization"],
+  mode: "training" | "inference"
+) {
+  const pathRegex =
+    mode === "training"
+      ? /(training|loss|update|objective|optimi[sz]e|backprop|target)/i
+      : /(inference|plan|planning|rollout|action|decode|generation|test time|goal)/i;
+  const includeNodeRegex =
+    mode === "training"
+      ? /(training|loss|objective|target|gradient|update|optimizer|sigreg|mse|prediction loss|total loss|regularizer)/i
+      : /(inference|plan|planning|rollout|action|decode|goal|test|start latent|goal latent|cem|initial observation|output)/i;
+  const excludeNodeRegex =
+    mode === "training"
+      ? /(goal observation|initial observation|goal latent|start latent|cem|terminal cost|rollout|test time|planning loop)/i
+      : /(loss|objective|target|gradient|update|optimizer|sigreg|mse|regularizer|backprop)/i;
+  const includeEdgeRegex =
+    mode === "training"
+      ? /(loss|objective|target|update|gradient|mse|sigreg)/i
+      : /(action|plan|rollout|decode|goal|test|output|prediction)/i;
+
+  const matchedPaths = visualization.graph.paths.filter((path) => pathRegex.test(`${path.label} ${path.description}`));
+  const edgeIndices = new Set<number>();
+  const nodeIds = new Set<string>();
+  const nodesById = new Map(visualization.graph.nodes.map((node) => [node.id, node]));
+
+  matchedPaths.forEach((path) => {
+    path.edgeSequence.forEach((edgeIndex) => edgeIndices.add(edgeIndex));
+    path.nodeSequence.forEach((nodeId) => nodeIds.add(nodeId));
+  });
+
+  if (!matchedPaths.length) {
+    visualization.graph.nodes.forEach((node) => {
+      const haystack = `${node.label} ${node.description} ${node.groupId ?? ""}`;
+      if (includeNodeRegex.test(haystack) && !excludeNodeRegex.test(haystack)) {
+        nodeIds.add(node.id);
+      }
+    });
+
+    visualization.graph.edges.forEach((edge, index) => {
+      const fromMatches = nodeIds.has(edge.fromNodeId);
+      const toMatches = nodeIds.has(edge.toNodeId);
+      const edgeHaystack = `${edge.tensorLabel} ${edge.semanticRole}`;
+      const edgeMatches = includeEdgeRegex.test(edgeHaystack);
+      const fromNode = nodesById.get(edge.fromNodeId);
+      const toNode = nodesById.get(edge.toNodeId);
+      const fromExcluded = fromNode ? excludeNodeRegex.test(`${fromNode.label} ${fromNode.description}`) : false;
+      const toExcluded = toNode ? excludeNodeRegex.test(`${toNode.label} ${toNode.description}`) : false;
+
+      if (!fromExcluded && !toExcluded && (edgeMatches || fromMatches || toMatches)) {
+        edgeIndices.add(index);
+        nodeIds.add(edge.fromNodeId);
+        nodeIds.add(edge.toNodeId);
+      }
+    });
+  }
+
+  if (mode === "training") {
+    visualization.graph.nodes.forEach((node) => {
+      const haystack = `${node.label} ${node.description}`;
+      if (/image|frame|observation|pixel|action|control|state|token|instruction/i.test(haystack) && !excludeNodeRegex.test(haystack)) {
+        const participatesInTrainingEdge = visualization.graph.edges.some(
+          (edge, index) =>
+            !excludeNodeRegex.test(`${nodesById.get(edge.toNodeId)?.label ?? ""} ${nodesById.get(edge.toNodeId)?.description ?? ""}`) &&
+            !excludeNodeRegex.test(`${nodesById.get(edge.fromNodeId)?.label ?? ""} ${nodesById.get(edge.fromNodeId)?.description ?? ""}`) &&
+            (edgeIndices.has(index) || nodeIds.has(edge.toNodeId)) &&
+            (edge.fromNodeId === node.id || edge.toNodeId === node.id)
+        );
+
+        if (participatesInTrainingEdge) {
+          nodeIds.add(node.id);
+        }
+      }
+    });
+  }
+
+  if (!nodeIds.size && !edgeIndices.size) {
+    return undefined;
+  }
+
+  const minLayer = Math.min(...visualization.graph.nodes.map((node) => node.layer));
+  const filteredEdges = visualization.graph.edges.filter(
+    (edge, index) =>
+      edgeIndices.has(index) &&
+      nodeIds.has(edge.fromNodeId) &&
+      nodeIds.has(edge.toNodeId) &&
+      !excludeNodeRegex.test(`${nodesById.get(edge.fromNodeId)?.label ?? ""} ${nodesById.get(edge.fromNodeId)?.description ?? ""}`) &&
+      !excludeNodeRegex.test(`${nodesById.get(edge.toNodeId)?.label ?? ""} ${nodesById.get(edge.toNodeId)?.description ?? ""}`)
+  );
+
+  if (!filteredEdges.length) {
+    return undefined;
+  }
+
+  const keptEdgeIndexMap = new Map<number, number>();
+  let nextEdgeIndex = 0;
+  visualization.graph.edges.forEach((edge, index) => {
+    if (edgeIndices.has(index) && filteredEdges.includes(edge)) {
+      keptEdgeIndexMap.set(index, nextEdgeIndex);
+      nextEdgeIndex += 1;
+    }
+  });
+
+  const survivingNodeIds = new Set<string>();
+  filteredEdges.forEach((edge) => {
+    survivingNodeIds.add(edge.fromNodeId);
+    survivingNodeIds.add(edge.toNodeId);
+  });
+
+  const filteredNodes = visualization.graph.nodes.filter((node) => survivingNodeIds.has(node.id));
+  const filteredGroups = visualization.graph.groups.filter((group) => filteredNodes.some((node) => node.groupId === group.id));
+  const filteredPaths = (matchedPaths.length ? matchedPaths : visualization.graph.paths)
+    .map((path) => ({
+      ...path,
+      edgeSequence: path.edgeSequence
+        .map((edgeIndex) => keptEdgeIndexMap.get(edgeIndex))
+        .filter((edgeIndex): edgeIndex is number => edgeIndex !== undefined),
+      nodeSequence: path.nodeSequence.filter((nodeId) => survivingNodeIds.has(nodeId))
+    }))
+    .filter((path) => path.edgeSequence.length > 0 && path.nodeSequence.length > 0);
+
+  return normalizeVisualizationGraph({
+    ...visualization,
+    title: mode === "training" ? "Training flow" : "Inference flow",
+    purpose:
+      mode === "training"
+        ? "Shows the optimization-time computation, including predictions, losses, and update-related signals."
+        : "Shows the forward-pass or planning-time computation used when the trained model is actually run.",
+    viewMode: mode,
+    graph: {
+      story:
+        mode === "training"
+          ? "This view isolates the training-time computation: inputs are encoded, predictions are formed, losses are computed, and the resulting signal is used to update the parameters."
+          : "This view isolates the inference-time computation: the trained model consumes current inputs and produces predictions, plans, or actions without updating its weights.",
+      nodes: filteredNodes,
+      edges: filteredEdges,
+      groups: filteredGroups,
+      paths:
+        filteredPaths.length > 0
+          ? filteredPaths
+          : [
+              {
+                id: `${mode}-path`,
+                label: mode === "training" ? "Training update" : "Main inference",
+                description:
+                  mode === "training"
+                    ? "Highlights the training-time computation and objective path."
+                    : "Highlights the inference-time forward pass or planning loop.",
+                edgeSequence: filteredEdges.map((_, index) => index),
+                nodeSequence: filteredNodes.map((node) => node.id)
+              }
+            ],
+      shapeNotes: [
+        ...visualization.graph.shapeNotes,
+        {
+          target: mode,
+          note:
+            mode === "training"
+              ? "This view intentionally focuses on training-time objectives and update-relevant computation."
+              : "This view intentionally focuses on inference-time rollout, planning, decoding, or action selection."
+        }
+      ]
+    }
+  });
+}
+
+function sectionToExplainer(section: z.infer<typeof detailSectionSchema> | undefined, mode: "training" | "inference") {
+  if (!section) {
+    return undefined;
+  }
+
+  return {
+    title: mode === "training" ? "Training, intuitively" : "Inference, intuitively",
+    summary: section.body,
+    steps: section.bullets,
+    shapeWalkthrough: [],
+    lossAndOptimization: mode === "training" ? [] : [],
+    workedExample: mode === "inference" ? [] : []
+  };
+}
+
 function mapLegacyKindToGraphNodeType(kind: "input" | "encoder" | "latent" | "transition" | "head" | "output" | "other"): typeof graphNodeTypeValues[number] {
   if (kind === "transition") {
     return "planner";
@@ -290,9 +498,33 @@ function mapLegacyKindToGraphNodeType(kind: "input" | "encoder" | "latent" | "tr
 
 export const paperSummarySchema = z.union([baseSummarySchema, legacySummarySchema]).transform((payload) => {
   if ("visualization" in payload) {
+    const legacyTrainingSection = payload.detailSections.find((section) => /training/i.test(section.title));
+    const legacyInferenceSection = payload.detailSections.find((section) => /inference/i.test(section.title));
+    const legacyCombinedSection = payload.detailSections.find(
+      (section) => section.title.trim().toLowerCase() === "training and inference, intuitively"
+    );
+
     return {
       ...payload,
-      visualization: normalizeVisualizationGraph(payload.visualization),
+      visualization: deriveFocusedVisualization(payload.visualization, "training") ?? normalizeVisualizationGraph(payload.visualization),
+      inferenceVisualization:
+        (payload.inferenceVisualization
+          ? normalizeVisualizationGraph(payload.inferenceVisualization)
+          : deriveFocusedVisualization(payload.visualization, "inference")) ?? undefined,
+      trainingExplainer:
+        payload.trainingExplainer ??
+        sectionToExplainer(legacyTrainingSection ?? legacyCombinedSection, "training"),
+      inferenceExplainer:
+        payload.inferenceExplainer ??
+        sectionToExplainer(legacyInferenceSection ?? legacyCombinedSection, "inference"),
+      figureStory: {
+        ...payload.figureStory,
+        imageUrl: payload.figureStory.imageUrl ?? undefined
+      },
+      importantFigures: payload.importantFigures.map((figure) => ({
+        ...figure,
+        imageUrl: figure.imageUrl ?? undefined
+      })),
       relatedConcepts: payload.relatedConcepts.map((concept) => ({
         ...concept,
         paperReference: concept.paperReference ?? undefined
@@ -358,12 +590,18 @@ export const paperSummarySchema = z.union([baseSummarySchema, legacySummarySchem
         ]
       }
     }),
+    trainingExplainer: sectionToExplainer(payload.detailSections.find((section) => /training/i.test(section.title)), "training"),
+    inferenceExplainer: sectionToExplainer(payload.detailSections.find((section) => /inference/i.test(section.title)), "inference"),
+    inferenceVisualization: undefined,
     intuition: payload.intuition,
     relatedConcepts: payload.relatedConcepts.map((concept) => ({
       ...concept,
       paperReference: concept.paperReference ?? undefined
     })),
-    importantFigures: payload.importantFigures,
+    importantFigures: payload.importantFigures.map((figure) => ({
+      ...figure,
+      imageUrl: figure.imageUrl ?? undefined
+    })),
     detailSections: payload.detailSections,
     limitations: payload.limitations
   };

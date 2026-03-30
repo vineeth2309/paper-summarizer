@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { getOpenAIModel } from "@/lib/openai-config";
 import { prisma } from "@/lib/prisma";
 
 const openai = process.env.OPENAI_API_KEY
@@ -62,7 +63,7 @@ export async function askPaperQuestion(params: {
     answer = `OpenAI is not configured, so this is a grounded local fallback.\n\nQuestion: ${params.question}\n\nPaper abstract: ${paper.abstract ?? "No abstract available."}`;
   } else {
     const response = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
+      model: getOpenAIModel("chat"),
       messages: [
         {
           role: "system",

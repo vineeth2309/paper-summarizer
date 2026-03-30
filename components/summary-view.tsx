@@ -92,6 +92,76 @@ function FigurePanel({
   );
 }
 
+function ExplainerPanel({
+  label,
+  explainer
+}: {
+  label: string;
+  explainer?: PaperSummaryPayload["trainingExplainer"];
+}) {
+  if (!explainer) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-[26px] border border-white/8 bg-[#111111] p-6">
+      <p className="text-sm uppercase tracking-[0.22em] text-mist">{label}</p>
+      <h3 className="mt-3 text-3xl font-semibold text-white">{explainer.title}</h3>
+      <p className="mt-4 text-base leading-8 text-[#ebe2d6]">{explainer.summary}</p>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">
+          <p className="text-sm uppercase tracking-[0.18em] text-mist">Main steps</p>
+          {explainer.steps.length ? (
+            <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-[#e5ded3] marker:text-[#cdb79e]">
+              {explainer.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-4 text-sm leading-6 text-mist">No step-by-step breakdown was returned for this section.</p>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          {explainer.shapeWalkthrough.length ? (
+            <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">
+              <p className="text-sm uppercase tracking-[0.18em] text-mist">Shapes</p>
+              <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-[#e5ded3] marker:text-[#cdb79e]">
+                {explainer.shapeWalkthrough.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {explainer.lossAndOptimization.length ? (
+            <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">
+              <p className="text-sm uppercase tracking-[0.18em] text-mist">Loss and optimization</p>
+              <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-[#e5ded3] marker:text-[#cdb79e]">
+                {explainer.lossAndOptimization.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {explainer.workedExample.length ? (
+            <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">
+              <p className="text-sm uppercase tracking-[0.18em] text-mist">Worked example</p>
+              <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-6 text-[#e5ded3] marker:text-[#cdb79e]">
+                {explainer.workedExample.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SummaryView({ summary, summaryStatus, figures, references }: Props) {
   const parsed = paperSummarySchema.safeParse(summary);
 
@@ -121,6 +191,13 @@ export function SummaryView({ summary, summaryStatus, figures, references }: Pro
     figures.find((figure) => figure.label === pickArchitectureFigure(figures)?.label) ??
     figures.find((figure) => figure.imageUrl && /architecture|overview|pipeline|framework|method|system|workflow|diagram|model/i.test(figure.caption ?? "")) ??
     null;
+  const architectureFigureDuplicatesHero =
+    !!architectureFigure &&
+    (architectureFigure.label === data.figureStory.label ||
+      (!!architectureFigure.imageUrl && architectureFigure.imageUrl === (data.figureStory.imageUrl ?? heroFigure?.imageUrl)));
+  const remainingDetailSections = data.detailSections.filter(
+    (section) => !["training, intuitively", "inference, intuitively", "training and inference, intuitively"].includes(section.title.trim().toLowerCase())
+  );
 
   return (
     <div className="space-y-5">
@@ -168,7 +245,7 @@ export function SummaryView({ summary, summaryStatus, figures, references }: Pro
         />
       </div>
 
-      {data.visualization.type === "architecture" && architectureFigure ? (
+      {data.visualization.type === "architecture" && architectureFigure && !architectureFigureDuplicatesHero ? (
         <div className="rounded-[26px] border border-white/8 bg-[#111111] p-6">
           <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
             <div>
@@ -195,6 +272,13 @@ export function SummaryView({ summary, summaryStatus, figures, references }: Pro
       ) : null}
 
       <GraphVisualization visualization={data.visualization} />
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <ExplainerPanel label="Training" explainer={data.trainingExplainer} />
+        <ExplainerPanel label="Inference" explainer={data.inferenceExplainer} />
+      </div>
+
+      {data.inferenceVisualization ? <GraphVisualization visualization={data.inferenceVisualization} /> : null}
 
       <div className="grid gap-5 xl:grid-cols-2">
         <div className="rounded-[26px] border border-white/8 bg-[#111111] p-6">
@@ -267,7 +351,7 @@ export function SummaryView({ summary, summaryStatus, figures, references }: Pro
       <div className="rounded-[26px] border border-white/8 bg-[#111111] p-6">
         <p className="text-sm uppercase tracking-[0.22em] text-mist">Detailed explanation</p>
         <div className="mt-5 grid gap-4 xl:grid-cols-2">
-          {data.detailSections.map((section) => (
+          {remainingDetailSections.map((section) => (
             <div key={section.title} className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">
               <h4 className="text-2xl font-semibold text-white">{section.title}</h4>
               <p className="mt-3 text-sm leading-7 text-mist">{section.body}</p>

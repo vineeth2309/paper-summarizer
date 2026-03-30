@@ -4,6 +4,31 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
+export function sanitizeText(input: string) {
+  return input
+    .replace(/\u0000/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+export function sanitizeJsonValue<T>(value: T): T {
+  if (typeof value === "string") {
+    return sanitizeText(value) as T;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeJsonValue(item)) as T;
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [key, sanitizeJsonValue(nestedValue)])
+    ) as T;
+  }
+
+  return value;
+}
+
 export function truncate(input: string, length = 220) {
   if (input.length <= length) {
     return input;

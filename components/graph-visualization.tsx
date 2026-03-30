@@ -87,9 +87,21 @@ function portPoint(
 }
 
 function pathForEdge(from: { x: number; y: number }, to: { x: number; y: number }) {
-  const deltaX = to.x - from.x;
-  const curve = Math.max(Math.abs(deltaX) * 0.42, 90);
-  return `M ${from.x} ${from.y} C ${from.x + curve} ${from.y}, ${to.x - curve} ${to.y}, ${to.x} ${to.y}`;
+  const bendX = from.x + (to.x - from.x) / 2;
+
+  if (Math.abs(to.x - from.x) < 80) {
+    return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+  }
+
+  return `M ${from.x} ${from.y} L ${bendX} ${from.y} L ${bendX} ${to.y} L ${to.x} ${to.y}`;
+}
+
+function clampText(value: string, length: number) {
+  if (value.length <= length) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(length - 3, 1)).trimEnd()}...`;
 }
 
 function GraphCanvas({
@@ -117,6 +129,7 @@ function GraphCanvas({
   const ROW_GAP = compact ? 72 : 96;
   const PADDING_X = compact ? 48 : 80;
   const PADDING_Y = compact ? 56 : 80;
+  const GROUP_HEADER_BAND = compact ? 86 : 104;
 
   const layers = useMemo(() => {
     const map = new Map<number, GraphNode[]>();
@@ -162,14 +175,14 @@ function GraphCanvas({
     );
     const tallestLayer = Math.max(...layerHeights, NODE_MIN_HEIGHT);
     const width = PADDING_X * 2 + layers.length * NODE_WIDTH + Math.max(layers.length - 1, 0) * COLUMN_GAP + (compact ? 36 : 64);
-    const height = PADDING_Y * 2 + tallestLayer;
+    const height = PADDING_Y * 2 + GROUP_HEADER_BAND + tallestLayer;
 
     layers.forEach((layer, layerIndex) => {
       const currentLayerHeight = layer.nodes.reduce(
         (total, node, index) => total + estimateNodeHeight(node, compact) + (index > 0 ? ROW_GAP : 0),
         0
       );
-      let currentY = PADDING_Y + (tallestLayer - currentLayerHeight) / 2;
+      let currentY = PADDING_Y + GROUP_HEADER_BAND + (tallestLayer - currentLayerHeight) / 2;
 
       layer.nodes.forEach((node) => {
         const nodeHeight = estimateNodeHeight(node, compact);
@@ -183,7 +196,7 @@ function GraphCanvas({
     });
 
     return { positions, width, height, nodeHeights };
-  }, [COLUMN_GAP, NODE_MIN_HEIGHT, NODE_WIDTH, PADDING_X, PADDING_Y, ROW_GAP, compact, layers]);
+  }, [COLUMN_GAP, GROUP_HEADER_BAND, NODE_MIN_HEIGHT, NODE_WIDTH, PADDING_X, PADDING_Y, ROW_GAP, compact, layers]);
 
   const selectedPath = paths[Math.min(pathIndex, paths.length - 1)];
   const maxStep = Math.max(selectedPath.edgeSequence.length - 1, 0);
@@ -242,6 +255,8 @@ function GraphCanvas({
   }, [isFullscreen]);
 
   const highlightedNodes = new Set(selectedPath.nodeSequence.slice(0, activeStep + 2));
+  const activeEdgeIndex = selectedPath.edgeSequence[Math.min(activeStep, Math.max(selectedPath.edgeSequence.length - 1, 0))];
+  const activeEdge = graph.edges[activeEdgeIndex];
   const currentNodeId =
     selectedPath.nodeSequence[Math.min(activeStep + 1, selectedPath.nodeSequence.length - 1)] ?? selectedPath.nodeSequence[0] ?? graph.nodes[0]?.id;
   const currentNode = graph.nodes.find((node) => node.id === currentNodeId) ?? graph.nodes[0];
@@ -383,14 +398,20 @@ function GraphCanvas({
                   <g key={group.id}>
                     <rect
                       x={x}
-                      y={20}
+                      y={PADDING_Y}
                       width={width}
-                      height={layout.height - 40}
+                      height={layout.height - PADDING_Y * 2}
                       rx={30}
                       fill="rgba(255,255,255,0.015)"
                       stroke="rgba(255,255,255,0.06)"
                     />
-                    <text x={x + 22} y={46} fill="rgba(240,230,216,0.88)" fontSize="14" letterSpacing="2.2">
+                    <text
+                      x={x + 22}
+                      y={PADDING_Y + 28}
+                      fill="rgba(240,230,216,0.88)"
+                      fontSize="13"
+                      letterSpacing="2"
+                    >
                       {group.label.toUpperCase()}
                     </text>
                   </g>
@@ -413,30 +434,35 @@ function GraphCanvas({
                 const end = portPoint(toNode, "left", edge.toPort, to.x, to.y, toHeight, NODE_WIDTH);
                 const pathDef = pathForEdge(start, end);
                 const isActive = edgeIsInPath(index, selectedPath, activeStep);
+                const shouldRenderEdgeLabel = isFullscreen ? isActive : index === activeEdgeIndex;
                 const labelX = Math.max(Math.min((start.x + end.x) / 2, layout.width - (compact ? 112 : 130)), compact ? 112 : 130);
                 const labelY = (start.y + end.y) / 2 - 14;
                 const labelWidth = compact ? 184 : 216;
-                const tensorText = edge.tensorLabel.length > (compact ? 22 : 28) ? `${edge.tensorLabel.slice(0, compact ? 22 : 28)}...` : edge.tensorLabel;
-                const shapeText = edge.shape.length > (compact ? 24 : 30) ? `${edge.shape.slice(0, compact ? 24 : 30)}...` : edge.shape;
+                const tensorText = clampText(edge.tensorLabel, compact ? 22 : 28);
+                const shapeText = clampText(edge.shape, compact ? 24 : 30);
 
                 return (
                   <g key={`${edge.fromNodeId}-${edge.toNodeId}-${index}`}>
                     <path d={pathDef} stroke={isActive ? "#f0e6d8" : "rgba(255,255,255,0.12)"} strokeWidth={isActive ? 2.5 : 1.25} />
-                    <rect
-                      x={labelX - labelWidth / 2}
-                      y={labelY - 18}
-                      width={labelWidth}
-                      height={40}
-                      rx={12}
-                      fill="rgba(15,15,15,0.92)"
-                      stroke={isActive ? "rgba(205,183,158,0.25)" : "rgba(255,255,255,0.06)"}
-                    />
-                    <text x={labelX} y={labelY - 2} textAnchor="middle" fill={isActive ? "#f0e6d8" : "rgba(232,223,212,0.82)"} fontSize="12">
-                      {tensorText}
-                    </text>
-                    <text x={labelX} y={labelY + 13} textAnchor="middle" fill="rgba(205,183,158,0.95)" fontSize="11">
-                      {shapeText}
-                    </text>
+                    {shouldRenderEdgeLabel ? (
+                      <>
+                        <rect
+                          x={labelX - labelWidth / 2}
+                          y={labelY - 18}
+                          width={labelWidth}
+                          height={40}
+                          rx={12}
+                          fill="rgba(15,15,15,0.96)"
+                          stroke={isActive ? "rgba(205,183,158,0.32)" : "rgba(255,255,255,0.08)"}
+                        />
+                        <text x={labelX} y={labelY - 2} textAnchor="middle" fill={isActive ? "#f0e6d8" : "rgba(232,223,212,0.82)"} fontSize="12">
+                          {tensorText}
+                        </text>
+                        <text x={labelX} y={labelY + 13} textAnchor="middle" fill="rgba(205,183,158,0.95)" fontSize="11">
+                          {shapeText}
+                        </text>
+                      </>
+                    ) : null}
                   </g>
                 );
               })}
@@ -473,7 +499,17 @@ function GraphCanvas({
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-[11px] uppercase tracking-[0.18em] text-mist">{nodeTypeLabel(node.type)}</p>
-                      <h4 className={`mt-2 font-semibold leading-tight text-white ${compact ? "text-[1.65rem]" : "text-[2rem]"}`}>{node.label}</h4>
+                      <h4
+                        className={`mt-2 font-semibold leading-tight text-white ${compact ? "text-[1.65rem]" : "text-[2rem]"}`}
+                        style={{
+                          display: "-webkit-box",
+                          WebkitLineClamp: compact ? 3 : 4,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden"
+                        }}
+                      >
+                        {node.label}
+                      </h4>
                     </div>
                     <span
                       className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.15em] ${
@@ -485,10 +521,30 @@ function GraphCanvas({
                       {node.shapeConfidence}
                     </span>
                   </div>
-                  <p className={`mt-4 text-[#e6ddd1] ${compact ? "text-[0.95rem] leading-7" : "text-base leading-8"}`}>{node.description}</p>
+                  <p
+                    className={`mt-4 text-[#e6ddd1] ${compact ? "text-[0.95rem] leading-7" : "text-base leading-8"}`}
+                    style={{
+                      display: "-webkit-box",
+                      WebkitLineClamp: compact ? 4 : 5,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden"
+                    }}
+                  >
+                    {node.description}
+                  </p>
                   <div className="mt-5 rounded-[18px] border border-white/8 bg-[#101010] p-4">
                     <p className="text-[10px] uppercase tracking-[0.16em] text-mist">Node shape</p>
-                    <p className={`${compact ? "mt-2 text-[0.95rem] leading-6" : "mt-2 text-base leading-7"} text-[#f0e6d8]`}>{node.shape}</p>
+                    <p
+                      className={`${compact ? "mt-2 text-[0.95rem] leading-6" : "mt-2 text-base leading-7"} text-[#f0e6d8]`}
+                      style={{
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden"
+                      }}
+                    >
+                      {node.shape}
+                    </p>
                   </div>
                 </div>
               );
@@ -506,6 +562,14 @@ function GraphCanvas({
             <p className="text-[11px] uppercase tracking-[0.16em] text-mist">Node shape</p>
             <p className="mt-2 text-sm leading-6 text-[#f1e8dc]">{currentNode.shape}</p>
           </div>
+          {activeEdge ? (
+            <div className="mt-4 rounded-[18px] border border-white/8 bg-[#121212] p-4">
+              <p className="text-[11px] uppercase tracking-[0.16em] text-mist">Active edge</p>
+              <p className="mt-2 text-sm leading-6 text-[#f1e8dc]">{activeEdge.tensorLabel}</p>
+              <p className="mt-2 text-sm leading-6 text-[#cdb79e]">{activeEdge.shape}</p>
+              <p className="mt-2 text-sm leading-6 text-mist">{activeEdge.semanticRole}</p>
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-[24px] border border-white/8 bg-white/[0.03] p-5">

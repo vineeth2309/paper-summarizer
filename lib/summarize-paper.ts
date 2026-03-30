@@ -1,7 +1,8 @@
 import OpenAI from "openai";
 import { prisma } from "@/lib/prisma";
+import { getOpenAIModel } from "@/lib/openai-config";
 import { loadPaperAgentPrompt } from "@/lib/prompts";
-import { hashString, truncate } from "@/lib/utils";
+import { hashString, sanitizeJsonValue, sanitizeText, truncate } from "@/lib/utils";
 import { paperSummarySchema, type PaperSummaryPayload } from "@/lib/summary-schema";
 import { embedText, projectEmbedding } from "@/lib/embedding";
 import { ensureLocalPdf, extractFiguresFromPdf, mergeFigureData } from "@/lib/figure-extraction";
@@ -418,6 +419,55 @@ function buildConceptualFallbackGraph(input: {
   };
 }
 
+function buildFallbackInferenceVisualization(graph: PaperSummaryPayload["visualization"]["graph"]) {
+  const inferenceEdgeIndices = graph.edges
+    .map((edge, index) => ({ edge, index }))
+    .filter(({ edge }) => !/loss|update|gradient|objective/i.test(`${edge.tensorLabel} ${edge.semanticRole}`))
+    .map(({ index }) => index);
+
+  const inferenceNodeIds = new Set<string>();
+  inferenceEdgeIndices.forEach((index) => {
+    const edge = graph.edges[index];
+    inferenceNodeIds.add(edge.fromNodeId);
+    inferenceNodeIds.add(edge.toNodeId);
+  });
+
+  const nodes = graph.nodes.filter((node) => inferenceNodeIds.has(node.id) || node.layer === 0);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = graph.edges.filter((edge, index) => inferenceEdgeIndices.includes(index) && nodeIds.has(edge.fromNodeId) && nodeIds.has(edge.toNodeId));
+
+  const paths = [
+    {
+      id: "inference-path",
+      label: "Main inference",
+      description: "Follows the forward pass used at test time or during planning.",
+      edgeSequence: edges.map((_, index) => index),
+      nodeSequence: nodes.map((node) => node.id)
+    }
+  ];
+
+  return {
+    type: "architecture" as const,
+    title: "Inference flow",
+    purpose: "Shows only the forward-pass or planning path used during inference, with the most important shapes preserved.",
+    viewMode: "inference" as const,
+    graph: {
+      story: "This graph isolates what happens when the trained model is actually used: inputs are encoded, transformed through the core model, and turned into predictions, actions, or decoded outputs.",
+      nodes,
+      edges,
+      groups: graph.groups.filter((group) => nodes.some((node) => node.groupId === group.id)),
+      paths,
+      shapeNotes: [
+        ...graph.shapeNotes,
+        {
+          target: "inference",
+          note: "This view intentionally excludes training-only objectives and parameter-update steps."
+        }
+      ]
+    }
+  };
+}
+
 function buildFallbackSummary(input: {
   title: string;
   abstract: string | null;
@@ -488,6 +538,78 @@ function buildFallbackSummary(input: {
       viewMode: "full",
       graph: fallbackGraph
     },
+    trainingExplainer:
+      paperType === "method_system"
+        ? {
+            title: "Training, intuitively",
+            summary:
+              "Training is repeated guess-and-correct: the model sees batches of paper-specific inputs, produces internal representations and predictions, measures how wrong those predictions are, and updates its parameters to reduce that error.",
+            steps: [
+              `Start with a batch of inputs such as ${fallbackGraph.nodes
+                .filter((node) => node.type === "input")
+                .map((node) => `${node.label} ${node.shape}`)
+                .join("; ")}.`,
+              `Encode or fuse those inputs into the shared internal state ${fallbackGraph.nodes.find((node) => node.id === "core-model")?.shape ?? "(B, D)"}.`,
+              "Run the prediction head to produce the paper's task output for each example in the batch.",
+              "Compare that output against the correct target for the task and turn the mismatch into a scalar loss.",
+              "Backpropagate the loss through the whole model and update weights with gradient-based optimization."
+            ],
+            shapeWalkthrough: [
+              `Inputs enter in batched form, for example ${fallbackGraph.nodes
+                .filter((node) => node.type === "input")
+                .map((node) => node.shape)
+                .join(", ")}.`,
+              `The core model produces a shared latent like ${fallbackGraph.nodes.find((node) => node.id === "core-model")?.shape ?? "(B, D)"}.`,
+              `The final head maps that latent to task outputs like ${fallbackGraph.nodes.find((node) => node.id === "prediction-head")?.shape ?? "(B, D')"}.`
+            ],
+            lossAndOptimization: [
+              "Loss means a single number that gets larger when the model's prediction is worse.",
+              "If the exact objective is unknown in fallback mode, assume a task-appropriate loss such as cross-entropy for classification or mean squared error for regression/prediction.",
+              "Optimization means taking the loss gradient with respect to the parameters and nudging the weights so the same batch would score better next time."
+            ],
+            workedExample: []
+          }
+        : undefined,
+    inferenceExplainer:
+      paperType === "method_system"
+        ? {
+            title: "Inference, intuitively",
+            summary:
+              "Inference is just the trained model being used: inputs go forward through the network once, the model produces a prediction or action, and the weights stay fixed.",
+            steps: [
+              "Take the current input available at test time and format it into the same kind of tensor structure used by the model.",
+              "Run the encoder or input-processing stage to get features or latents.",
+              "Pass those features through the core model to produce the internal state needed for the final decision.",
+              "Use the output head to emit the prediction, decoded output, score, or action needed by the task.",
+              "Do not compute gradients or update parameters during this pass."
+            ],
+            shapeWalkthrough: [
+              `A single example usually looks like batch size 1, for example ${(fallbackGraph.nodes.find((node) => node.layer === 0)?.shape ?? "(B, ...)").replace("(B,", "(1,")}.`,
+              `The encoder/core path produces an internal representation like ${(fallbackGraph.nodes.find((node) => node.id === "core-model")?.shape ?? "(B, D)").replace("(B,", "(1,")}.`,
+              `The output head returns the final result in shape ${(fallbackGraph.nodes.find((node) => node.id === "prediction-head")?.shape ?? "(B, D')").replace("(B,", "(1,")}.`
+            ],
+            lossAndOptimization: [],
+            workedExample: [
+              `Example: if the input is a single item with batch size 1, the model maps it from input tensors to ${(fallbackGraph.nodes.find((node) => node.id === "core-model")?.shape ?? "(B, D)").replace("(B,", "(1,")} and then to ${(fallbackGraph.nodes.find((node) => node.id === "prediction-head")?.shape ?? "(B, D')").replace("(B,", "(1,")}.`,
+              "The important intuition is that inference only runs the learned computation forward; it does not compare against a target or adjust any weights."
+            ]
+          }
+        : {
+            title: "Inference, intuitively",
+            summary:
+              "This paper is better understood as a stage-by-stage operating procedure: what comes in, what gets transformed, and what final result or claim comes out.",
+            steps: [
+              "Identify the starting input, premise, or evaluation setup.",
+              "Follow the main processing or reasoning stages in order.",
+              "Read the final output, claim, or measurement as the result of those stages."
+            ],
+            shapeWalkthrough: [],
+            lossAndOptimization: [],
+            workedExample: []
+          },
+    inferenceVisualization: paperType === "method_system"
+      ? buildFallbackInferenceVisualization(fallbackGraph)
+      : undefined,
     intuition: [
       {
         title: "What to keep in mind",
@@ -560,7 +682,7 @@ async function plannerPass(context: string) {
   }
 
   const response = await openai.chat.completions.create({
-    model: "gpt-4.1-mini",
+    model: getOpenAIModel("planner"),
     response_format: { type: "json_object" },
     messages: [
       {
@@ -694,7 +816,7 @@ export async function summarizePaper(paperId: string) {
       summaryPayload = buildFallbackSummary(paper);
     } else {
       const response = await openai.chat.completions.create({
-        model: "gpt-4.1",
+        model: getOpenAIModel("summary"),
         response_format: { type: "json_object" },
         messages: [
           {
@@ -732,8 +854,10 @@ export async function summarizePaper(paperId: string) {
         throw new Error("The model returned an empty summary.");
       }
 
-      summaryPayload = paperSummarySchema.parse(JSON.parse(content));
+      summaryPayload = sanitizeJsonValue(paperSummarySchema.parse(JSON.parse(content)));
     }
+
+    summaryPayload = sanitizeJsonValue(summaryPayload);
 
     const vector = await embedText(
       `${paper.title}\n${summaryPayload.oneLiner}\n${summaryPayload.narrativeSummary}\n${summaryPayload.keyTakeaways.join("\n")}`
@@ -755,7 +879,7 @@ export async function summarizePaper(paperId: string) {
         data: {
           paperId,
           version: paper.summaryVersion + 1,
-          model: openai ? "gpt-4.1" : "local-fallback",
+          model: openai ? getOpenAIModel("summary") : "local-fallback",
           promptHash,
           content: summaryPayload
         }
@@ -774,7 +898,7 @@ export async function summarizePaper(paperId: string) {
 
     return summaryPayload;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to summarize paper.";
+    const message = sanitizeText(error instanceof Error ? error.message : "Failed to summarize paper.");
 
     await prisma.paper.update({
       where: { id: paperId },
